@@ -1,0 +1,17 @@
+.env
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+*.pyd
+
+# Local generated data
+knowledge.db
+input_docs/
+obsidian_vault/
+
+# Virtual environments
+.venv/
+venv/
