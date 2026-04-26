@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -22,6 +23,7 @@ def parse_document(path: Path, config: AppConfig) -> ParsedArtifact:
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported file type: {suffix}")
+    _log(f"Parsing file={path.name} type={suffix}")
 
     if suffix in {".pdf"}:
         parsed = _parse_pdf_with_pipeline(path, config)
@@ -64,7 +66,12 @@ def parse_document(path: Path, config: AppConfig) -> ParsedArtifact:
 
 def _parse_pdf_with_pipeline(path: Path, config: AppConfig) -> dict[str, str | bool]:
     page_count = _safe_pdf_page_count(path)
+    _log(f"PDF pages detected: {page_count} for {path.name}")
     if page_count >= config.large_pdf_page_threshold and config.fallback_parser_enabled:
+        _log(
+            f"Large PDF shortcut enabled ({page_count} >= {config.large_pdf_page_threshold}), "
+            f"using pagewise pypdf batch={config.pdf_batch_pages}"
+        )
         raw_text = _parse_pdf_pagewise(path, config.pdf_batch_pages)
         return {
             "markdown": _as_markdown_paragraphs(raw_text),
@@ -75,15 +82,20 @@ def _parse_pdf_with_pipeline(path: Path, config: AppConfig) -> dict[str, str | b
 
     for parser_name in config.parser_order:
         if parser_name == "mineru":
+            _log("Trying parser: mineru")
             result = _run_mineru(path, config)
             if result:
+                _log("Parser success: mineru")
                 return {**result, "parser_used": "mineru", "low_confidence": False}
         elif parser_name == "paddleocr":
+            _log("Trying parser: paddleocr")
             result = _run_command_parser(["paddleocr", "--image_dir", str(path)], config)
             if result:
+                _log("Parser success: paddleocr")
                 return {**result, "parser_used": "paddleocr", "low_confidence": True}
 
     if config.fallback_parser_enabled:
+        _log("All configured parsers failed, fallback to pypdf pagewise")
         raw_text = _parse_pdf_pagewise(path, config.pdf_batch_pages)
         return {
             "markdown": _as_markdown_paragraphs(raw_text),
@@ -110,8 +122,10 @@ def _parse_pdf_pagewise(path: Path, batch_pages: int) -> str:
     reader = PdfReader(str(path))
     batches: list[str] = []
     page_count = len(reader.pages)
+    _log(f"Pagewise extraction start pages={page_count} batch_size={batch_pages}")
     for start in range(0, page_count, batch_pages):
         stop = min(start + batch_pages, page_count)
+        _log(f"Extracting pages {start + 1}-{stop}")
         batch_text = []
         for page_idx in range(start, stop):
             batch_text.append(reader.pages[page_idx].extract_text() or "")
@@ -122,6 +136,7 @@ def _parse_pdf_pagewise(path: Path, batch_pages: int) -> str:
 def _run_mineru(path: Path, config: AppConfig) -> dict[str, str] | None:
     with tempfile.TemporaryDirectory(prefix="mineru_out_") as output_dir:
         command = ["mineru", "-p", str(path), "-o", output_dir]
+        _log(f"Running command: {' '.join(command)}")
         completed = subprocess.run(
             command,
             capture_output=True,
@@ -130,6 +145,7 @@ def _run_mineru(path: Path, config: AppConfig) -> dict[str, str] | None:
             check=False,
         )
         if completed.returncode != 0:
+            _log(f"MinerU failed code={completed.returncode}")
             return None
 
         output_path = Path(output_dir)
@@ -140,6 +156,7 @@ def _run_mineru(path: Path, config: AppConfig) -> dict[str, str] | None:
         markdown_parts = [md.read_text(encoding="utf-8", errors="ignore") for md in md_files]
         markdown = "\n\n".join(part.strip() for part in markdown_parts if part.strip())
         if not markdown:
+            _log("MinerU produced empty markdown")
             return None
         plain_text = _strip_markdown(markdown)
         return {"markdown": markdown, "plain_text": plain_text}
@@ -147,6 +164,7 @@ def _run_mineru(path: Path, config: AppConfig) -> dict[str, str] | None:
 
 def _run_command_parser(command: list[str], config: AppConfig) -> dict[str, str] | None:
     try:
+        _log(f"Running command: {' '.join(command)}")
         completed = subprocess.run(
             command,
             capture_output=True,
@@ -155,6 +173,7 @@ def _run_command_parser(command: list[str], config: AppConfig) -> dict[str, str]
             check=False,
         )
         if completed.returncode != 0 or not completed.stdout.strip():
+            _log(f"Command parser failed code={completed.returncode}")
             return None
         markdown = completed.stdout.strip()
         plain_text = _strip_markdown(markdown)
@@ -195,4 +214,10 @@ def _strip_markdown(markdown: str) -> str:
     text = re.sub(r"\[[^\]]+\]\([^)]+\)", "", text)
     text = re.sub(r"[#>*`~\-]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _log(message: str) -> None:
+    text = f"[parser] {message}"
+    safe = text.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8")
+    print(safe, flush=True)
 

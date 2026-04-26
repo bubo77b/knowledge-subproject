@@ -62,6 +62,14 @@ LLM_MODEL=qwen2.5:7b
 - SQLite：`documents / notes / links`
 - 每篇笔记 frontmatter 含 `parser_used`，便于你后续做质量追踪与再处理
 
+## 运行时进度日志
+
+运行 `python -m knowledge_pipeline.cli` 时会输出实时日志：
+
+- `[knowledge-pipeline]`：文件级进度、跳过/失败、总耗时
+- `[parser]`：当前解析器尝试、页数、分页提取进度、命令执行状态
+- `[analyzer]`：文本分块数量、每块分析进度、回退策略
+
 ## 关于 Pillow 与替代方案
 
 - `MinerU` 近期依赖会把 `Pillow` 升级到 `12.x`

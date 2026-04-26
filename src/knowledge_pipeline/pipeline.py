@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
+import time
 from pathlib import Path
 
 from .analyzer import build_knowledge_note
@@ -12,19 +14,25 @@ from .storage import Storage
 
 
 def run_pipeline(config: AppConfig) -> dict[str, int]:
+    started_at = time.perf_counter()
     config.input_dir.mkdir(parents=True, exist_ok=True)
     config.obsidian_vault_dir.mkdir(parents=True, exist_ok=True)
 
     storage = Storage(config.sqlite_path)
     writer = ObsidianWriter(config.obsidian_vault_dir, config.notes_subdir)
     stats = {"processed": 0, "skipped": 0, "failed": 0}
+    files = list(_iter_input_files(config.input_dir))
+    _log(f"Found {len(files)} supported files in {config.input_dir}")
 
     try:
-        for file_path in _iter_input_files(config.input_dir):
+        for index, file_path in enumerate(files, start=1):
+            file_started = time.perf_counter()
+            _log(f"[{index}/{len(files)}] Processing {file_path.name}")
             try:
                 doc = parse_document(file_path, config)
                 if storage.is_document_seen(doc):
                     stats["skipped"] += 1
+                    _log(f"[{index}/{len(files)}] Skipped (unchanged checksum)")
                     continue
 
                 note_id = _build_note_id(doc.title, doc.source_path)
@@ -43,11 +51,22 @@ def run_pipeline(config: AppConfig) -> dict[str, int]:
                 storage.upsert_document(doc)
                 storage.upsert_note(note, str(note_path))
                 stats["processed"] += 1
-            except Exception:
+                elapsed = time.perf_counter() - file_started
+                _log(
+                    f"[{index}/{len(files)}] Done parser={doc.parser_used} "
+                    f"related={len(related_ids)} elapsed={elapsed:.1f}s"
+                )
+            except Exception as exc:
                 stats["failed"] += 1
+                _log(f"[{index}/{len(files)}] Failed: {file_path.name} ({exc})")
     finally:
         storage.close()
 
+    total_elapsed = time.perf_counter() - started_at
+    _log(
+        f"Pipeline finished processed={stats['processed']} skipped={stats['skipped']} "
+        f"failed={stats['failed']} elapsed={total_elapsed:.1f}s"
+    )
     return stats
 
 
@@ -81,4 +100,10 @@ def _find_related_ids(related_topics: list[str], notes: list[tuple[str, str, str
 
     matches.sort(key=lambda item: item[1], reverse=True)
     return [note_id for note_id, _ in matches[:5]]
+
+
+def _log(message: str) -> None:
+    text = f"[knowledge-pipeline] {message}"
+    safe = text.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8")
+    print(safe, flush=True)
 
