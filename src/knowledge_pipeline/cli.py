@@ -35,6 +35,8 @@ def main() -> None:
             "llm_enabled": config.llm_enabled,
             "llm_model": config.llm_model,
             "llm_base_url": config.llm_base_url,
+            "ollama_native_url": config.ollama_native_url,
+            "llm_timeout_seconds": config.llm_timeout_seconds,
             "max_chars_for_analysis": config.max_chars_for_analysis,
             "ai_chunk_size_chars": config.ai_chunk_size_chars,
             "ai_chunk_overlap_chars": config.ai_chunk_overlap_chars,

@@ -25,6 +25,8 @@ class AppConfig:
     llm_model: str
     llm_api_key: str | None
     llm_base_url: str | None
+    ollama_native_url: str
+    llm_timeout_seconds: int
     max_chars_for_analysis: int
     ai_chunk_size_chars: int
     ai_chunk_overlap_chars: int
@@ -51,6 +53,8 @@ def load_config() -> AppConfig:
     llm_model = os.getenv("LLM_MODEL", "qwen2.5:7b")
     llm_api_key = os.getenv("LLM_API_KEY")
     llm_base_url = os.getenv("LLM_BASE_URL")
+    ollama_native_url = os.getenv("OLLAMA_NATIVE_URL", "http://localhost:11434/api/generate")
+    llm_timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
     max_chars_for_analysis = int(os.getenv("MAX_CHARS_FOR_ANALYSIS", "8000"))
     ai_chunk_size_chars = int(os.getenv("AI_CHUNK_SIZE_CHARS", "6000"))
     ai_chunk_overlap_chars = int(os.getenv("AI_CHUNK_OVERLAP_CHARS", "600"))
@@ -80,6 +84,8 @@ def load_config() -> AppConfig:
         llm_model=llm_model,
         llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
+        ollama_native_url=ollama_native_url,
+        llm_timeout_seconds=llm_timeout_seconds,
         max_chars_for_analysis=max_chars_for_analysis,
         ai_chunk_size_chars=ai_chunk_size_chars,
         ai_chunk_overlap_chars=ai_chunk_overlap_chars,

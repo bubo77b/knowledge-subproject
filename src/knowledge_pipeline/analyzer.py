@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from collections import Counter
 from typing import Any
+from urllib import request
 
 from openai import OpenAI
 
@@ -73,22 +75,70 @@ def _analyze(text: str, title: str, config: AppConfig) -> dict[str, Any]:
     )
     if not chunks:
         chunks = [text[: config.max_chars_for_analysis]]
+    _log(f"Analysis chunks={len(chunks)} title={title}")
 
     if not config.llm_enabled or config.llm_provider == "none":
+        _log("LLM disabled or provider none, using rule-based analysis")
         return _analyze_with_rules("\n".join(chunks[:3]), title)
     try:
-        partials = [_analyze_with_provider(chunk, f"{title} (chunk {idx + 1})", config) for idx, chunk in enumerate(chunks)]
+        partials = []
+        for idx, chunk in enumerate(chunks, start=1):
+            _log(f"Analyzing chunk {idx}/{len(chunks)} with provider={config.llm_provider}")
+            partials.append(_analyze_with_provider(chunk, f"{title} (chunk {idx})", config))
         return _merge_partial_results(partials, title)
     except Exception:
+        _log("Provider analysis failed, fallback to rule-based analysis")
         return _analyze_with_rules("\n".join(chunks[:3]), title)
 
 
 def _analyze_with_provider(text: str, title: str, config: AppConfig) -> dict[str, Any]:
     if config.llm_provider == "openai" and not config.llm_api_key:
         return _analyze_with_rules(text, title)
-    if config.llm_provider == "ollama" and not config.llm_base_url:
-        return _analyze_with_rules(text, title)
+    if config.llm_provider == "ollama":
+        return _analyze_with_ollama_native_first(text, title, config)
     return _analyze_with_llm(text, title, config)
+
+
+def _analyze_with_ollama_native_first(text: str, title: str, config: AppConfig) -> dict[str, Any]:
+    try:
+        _log("Using native Ollama endpoint /api/generate")
+        return _analyze_with_ollama_native(text, title, config)
+    except Exception:
+        _log("Native Ollama endpoint failed, fallback to OpenAI-compatible endpoint")
+        if config.llm_base_url:
+            return _analyze_with_llm(text, title, config)
+        return _analyze_with_rules(text, title)
+
+
+def _analyze_with_ollama_native(text: str, title: str, config: AppConfig) -> dict[str, Any]:
+    prompt = (
+        "你是知识管理助手。请分析文档并严格返回 JSON 对象，字段："
+        "summary(string), tags(string[]), entities(string[]), key_points(string[]), related_topics(string[]).\n"
+        "不要返回 markdown 或额外文本。\n\n"
+        f"标题: {title}\n\n内容:\n{text}"
+    )
+    payload = {
+        "model": config.llm_model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0.2},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        url=config.ollama_native_url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with request.urlopen(req, timeout=config.llm_timeout_seconds) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    outer = _safe_json(raw)
+    content = str(outer.get("response", "")).strip()
+    result = _safe_json(content)
+    if not result:
+        raise ValueError("Empty JSON response from Ollama native endpoint")
+    return result
 
 
 def _analyze_with_llm(text: str, title: str, config: AppConfig) -> dict[str, Any]:
@@ -102,6 +152,7 @@ def _analyze_with_llm(text: str, title: str, config: AppConfig) -> dict[str, Any
     response = client.chat.completions.create(
         model=config.llm_model,
         temperature=0.2,
+        timeout=config.llm_timeout_seconds,
         messages=[
             {"role": "system", "content": prompt},
             {"role": "user", "content": user_content},
@@ -219,4 +270,10 @@ def _collect_unique_lists(partials: list[dict[str, Any]], key: str) -> list[str]
                 if cleaned and cleaned not in result:
                     result.append(cleaned)
     return result
+
+
+def _log(message: str) -> None:
+    text = f"[analyzer] {message}"
+    safe = text.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8")
+    print(safe, flush=True)
 
