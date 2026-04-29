@@ -1,3 +1,120 @@
+# MinerU Knowledge Skill
+
+A Python toolchain that converts mixed documents to Markdown, stores knowledge in ChromaDB, and syncs notes to Obsidian with bidirectional links.
+
+## Features
+
+- `CLI + REST` dual entrypoints for local use and AI assistant integration.
+- MinerU-first parsing with robust fallback parsers.
+- Markdown normalization for cleaner headings and structure.
+- ChromaDB ingestion and retrieval APIs for RAG context building.
+- Obsidian note generation with wiki-link and backlink support.
+
+## Quick Start
+
+1. Install dependencies:
+
+   ```bash
+   pip install -e .[dev]
+   ```
+
+2. Configure settings:
+
+   - Edit `config/settings.yaml`.
+
+3. Run CLI:
+
+   ```bash
+   knowledge-skill ingest ./docs --to-markdown --to-chroma --to-obsidian
+   ```
+
+4. Run REST API:
+
+   ```bash
+   uvicorn src.app.main:app --reload --port 8000
+   ```
+
+## CLI Examples
+
+- Parse to Markdown only:
+  - `knowledge-skill ingest ./docs --to-markdown`
+- Parse + ingest into ChromaDB:
+  - `knowledge-skill ingest ./docs --to-markdown --to-chroma`
+- Search knowledge base:
+  - `knowledge-skill search "transformer attention"`
+
+## REST Endpoints
+
+- `POST /ingest`
+- `POST /search`
+- `POST /retrieve_context`
+- `GET /health`
+
+## Testing
+
+```bash
+pytest
+```
+<<<<<<< HEAD
+=======
+# MinerU Knowledge Skill
+
+A Python toolchain that converts mixed documents to Markdown, stores knowledge in ChromaDB, and syncs notes to Obsidian with bidirectional links.
+
+## Features
+
+- `CLI + REST` dual entrypoints for local use and AI assistant integration.
+- MinerU-first parsing with robust fallback parsers.
+- Markdown normalization for cleaner headings and structure.
+- ChromaDB ingestion and retrieval APIs for RAG context building.
+- Obsidian note generation with wiki-link and backlink support.
+
+## Quick Start
+
+1. Install dependencies:
+
+   ```bash
+   pip install -e .[dev]
+   ```
+
+2. Configure settings:
+
+   - Edit `config/settings.yaml`.
+
+3. Run CLI:
+
+   ```bash
+   knowledge-skill ingest ./docs --to-markdown --to-chroma --to-obsidian
+   ```
+
+4. Run REST API:
+
+   ```bash
+   uvicorn src.app.main:app --reload --port 8000
+   ```
+
+## CLI Examples
+
+- Parse to Markdown only:
+  - `knowledge-skill ingest ./docs --to-markdown`
+- Parse + ingest into ChromaDB:
+  - `knowledge-skill ingest ./docs --to-markdown --to-chroma`
+- Search knowledge base:
+  - `knowledge-skill search "transformer attention"`
+
+## REST Endpoints
+
+- `POST /ingest`
+- `POST /search`
+- `POST /retrieve_context`
+- `GET /health`
+
+## Testing
+
+```bash
+pytest
+```
+>>>>>>> 1c9f9dd (Build initial MinerU knowledge skill scaffold with parsing, retrieval, and Obsidian sync.)
 # Knowledge Subproject (文档到 Obsidian 知识管道)
 
 这是一个按你要求重构的完整版本：  
@@ -6,7 +123,11 @@
 ## 架构
 
 1. 解析层（PDF 优先）：按 `PARSER_ORDER` 顺序尝试
+<<<<<<< HEAD
    - `mineru`
+=======
+   - `mineru`（优先）
+>>>>>>> 1c9f9dd (Build initial MinerU knowledge skill scaffold with parsing, retrieval, and Obsidian sync.)
    - `paddleocr`
    - 都失败时可回退到 `pypdf`（可配置）
    - 超大 PDF（页数超阈值）自动走 `pypdf` 分页批处理，避免内存和超时问题
@@ -25,6 +146,11 @@
 ## 快速开始
 
 ```bash
+<<<<<<< HEAD
+=======
+py -3.12 -m venv .venv
+.\.venv\Scripts\activate
+>>>>>>> 1c9f9dd (Build initial MinerU knowledge skill scaffold with parsing, retrieval, and Obsidian sync.)
 pip install -r requirements.txt
 copy .env.example .env
 python -m knowledge_pipeline.cli --print-config
@@ -33,7 +159,16 @@ python -m knowledge_pipeline.cli
 
 ## `.env` 关键项
 
+<<<<<<< HEAD
 - `PARSER_ORDER=mineru,marker,paddleocr`
+=======
+- `PARSER_ORDER=mineru,paddleocr`
+- `MINERU_EXECUTABLE=./.venv312-mineru/Scripts/mineru.exe`（推荐 Python 3.12 专用环境）
+- `MINERU_API_URL=`（可选，指向已启动的 `mineru-api`，例如 `http://127.0.0.1:59111`）
+- `MINERU_BACKEND=pipeline`
+- `MINERU_METHOD=txt`
+- `MINERU_DISABLE_PROXY=true`（避免本地 API 被代理劫持导致 502）
+>>>>>>> 1c9f9dd (Build initial MinerU knowledge skill scaffold with parsing, retrieval, and Obsidian sync.)
 - `PARSER_TIMEOUT_SECONDS=120`
 - `FALLBACK_PARSER_ENABLED=true`
 - `LARGE_PDF_PAGE_THRESHOLD=300`
@@ -56,6 +191,24 @@ LLM_API_KEY=ollama
 LLM_MODEL=qwen2.5:7b
 ```
 
+<<<<<<< HEAD
+=======
+## Windows 上 MinerU 优先推荐
+
+```bash
+py -3.12 -m venv .venv312-mineru
+.\.venv312-mineru\Scripts\python -m pip install -U pip
+.\.venv312-mineru\Scripts\python -m pip install "mineru[all]"
+```
+
+然后在 `.env` 中设置：
+
+```env
+PARSER_ORDER=mineru,paddleocr
+MINERU_EXECUTABLE=./.venv312-mineru/Scripts/mineru.exe
+```
+
+>>>>>>> 1c9f9dd (Build initial MinerU knowledge skill scaffold with parsing, retrieval, and Obsidian sync.)
 ## 产物
 
 - Obsidian 笔记：`<vault>/<notes_subdir>/<note_id>.md`

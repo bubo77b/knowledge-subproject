@@ -1,0 +1,18 @@
+project_name: MinerU Knowledge Skill
+output_dir: ./outputs/markdown
+assets_dir: ./outputs/assets
+chroma_path: ./outputs/chroma
+chroma_collection: personal_knowledge
+obsidian_vault_path: ./outputs/obsidian_vault
+obsidian_managed_block_start: "<!-- AI_MANAGED_START -->"
+obsidian_managed_block_end: "<!-- AI_MANAGED_END -->"
+mineru_enabled: true
+mineru_timeout_seconds: 120
+chunk_size: 800
+chunk_overlap: 120
+context_top_k: 6
+keyword_min_len: 4
+keyword_top_k: 12
+synonym_map:
+  llm: large_language_model
+  rag: retrieval_augmented_generation
