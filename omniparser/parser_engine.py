@@ -8,7 +8,14 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from omniparser.models import BBoxInfo, ContentElement, DocCategory, EngineType, ParseResult
+from omniparser.models import (
+    BBoxInfo,
+    ContentElement,
+    DocCategory,
+    EngineType,
+    PageRange,
+    ParseResult,
+)
 
 logger = logging.getLogger("omniparser.engine")
 
@@ -23,8 +30,16 @@ class BaseEngine(ABC):
     engine_type: EngineType
 
     @abstractmethod
-    def parse(self, pdf_path: Path) -> ParseResult:
-        """Parse *pdf_path* and return a ``ParseResult``."""
+    def parse(
+        self, pdf_path: Path, *, page_range: PageRange | None = None,
+    ) -> ParseResult:
+        """Parse *pdf_path* and return a ``ParseResult``.
+
+        Args:
+            pdf_path: Path to the PDF file.
+            page_range: Optional 1-based inclusive page range to extract.
+                When ``None``, the entire document is processed.
+        """
 
     # Shared helpers ---------------------------------------------------------
 
@@ -48,14 +63,21 @@ class DoclingEngine(BaseEngine):
 
     engine_type = EngineType.DOCLING
 
-    def parse(self, pdf_path: Path) -> ParseResult:
+    def parse(
+        self, pdf_path: Path, *, page_range: PageRange | None = None,
+    ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
         try:
             from docling.document_converter import DocumentConverter
 
             converter = DocumentConverter()
-            result = converter.convert(str(pdf_path))
+
+            convert_kwargs: dict = {"source": str(pdf_path)}
+            if page_range is not None:
+                convert_kwargs["page_range"] = (page_range.start, page_range.end)
+
+            result = converter.convert(**convert_kwargs)
             doc = result.document
 
             md = doc.export_to_markdown()
@@ -71,10 +93,16 @@ class DoclingEngine(BaseEngine):
                 ))
 
             page_count = self._get_page_count(doc, pdf_path)
+            if page_range is not None:
+                total_pages = page_count
+                page_count = min(page_range.end, total_pages) - page_range.start + 1
+                page_count = max(page_count, 0)
+
             elapsed = time.monotonic() - t0
+            pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "Docling parsed %s: %d pages, %d elements in %.1fs",
-                pdf_path.name, page_count, len(elements), elapsed,
+                "Docling parsed %s%s: %d pages, %d elements in %.1fs",
+                pdf_path.name, pr_label, page_count, len(elements), elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -86,6 +114,7 @@ class DoclingEngine(BaseEngine):
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
                 elapsed_sec=elapsed,
+                page_range=page_range,
             )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -97,6 +126,7 @@ class DoclingEngine(BaseEngine):
                 markdown="",
                 elapsed_sec=elapsed,
                 error=str(exc),
+                page_range=page_range,
             )
 
     @staticmethod
@@ -172,7 +202,9 @@ class MinerUEngine(BaseEngine):
 
     engine_type = EngineType.MINERU
 
-    def parse(self, pdf_path: Path) -> ParseResult:
+    def parse(
+        self, pdf_path: Path, *, page_range: PageRange | None = None,
+    ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
         try:
@@ -185,6 +217,9 @@ class MinerUEngine(BaseEngine):
                     "-o", tmpdir,
                     "-m", "txt",
                 ]
+                if page_range is not None:
+                    cmd.extend(["-p", str(page_range)])
+
                 proc = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=600,
                 )
@@ -200,10 +235,15 @@ class MinerUEngine(BaseEngine):
                 elements = self._elements_from_markdown(md)
 
             page_count = self._page_count(pdf_path)
+            if page_range is not None:
+                page_count = min(page_range.end, page_count) - page_range.start + 1
+                page_count = max(page_count, 0)
+
             elapsed = time.monotonic() - t0
+            pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "MinerU parsed %s: %d pages in %.1fs",
-                pdf_path.name, page_count, elapsed,
+                "MinerU parsed %s%s: %d pages in %.1fs",
+                pdf_path.name, pr_label, page_count, elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -215,6 +255,7 @@ class MinerUEngine(BaseEngine):
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
                 elapsed_sec=elapsed,
+                page_range=page_range,
             )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -226,6 +267,7 @@ class MinerUEngine(BaseEngine):
                 markdown="",
                 elapsed_sec=elapsed,
                 error=str(exc),
+                page_range=page_range,
             )
 
     @staticmethod
@@ -264,7 +306,9 @@ class MarkerEngine(BaseEngine):
 
     engine_type = EngineType.MARKER
 
-    def parse(self, pdf_path: Path) -> ParseResult:
+    def parse(
+        self, pdf_path: Path, *, page_range: PageRange | None = None,
+    ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
         try:
@@ -276,6 +320,9 @@ class MarkerEngine(BaseEngine):
                     "marker_single", str(pdf_path),
                     tmpdir,
                 ]
+                if page_range is not None:
+                    cmd.extend(["--page_range", str(page_range)])
+
                 proc = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=600,
                 )
@@ -292,10 +339,15 @@ class MarkerEngine(BaseEngine):
                 elements = MinerUEngine._elements_from_markdown(md)
 
             page_count = MinerUEngine._page_count(pdf_path)
+            if page_range is not None:
+                page_count = min(page_range.end, page_count) - page_range.start + 1
+                page_count = max(page_count, 0)
+
             elapsed = time.monotonic() - t0
+            pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "Marker parsed %s: %d pages in %.1fs",
-                pdf_path.name, page_count, elapsed,
+                "Marker parsed %s%s: %d pages in %.1fs",
+                pdf_path.name, pr_label, page_count, elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -307,6 +359,7 @@ class MarkerEngine(BaseEngine):
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
                 elapsed_sec=elapsed,
+                page_range=page_range,
             )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -318,6 +371,7 @@ class MarkerEngine(BaseEngine):
                 markdown="",
                 elapsed_sec=elapsed,
                 error=str(exc),
+                page_range=page_range,
             )
 
 
@@ -330,32 +384,45 @@ class PyPDFEngine(BaseEngine):
 
     engine_type = EngineType.DOCLING  # reported as docling-fallback in logs
 
-    def parse(self, pdf_path: Path) -> ParseResult:
+    def parse(
+        self, pdf_path: Path, *, page_range: PageRange | None = None,
+    ) -> ParseResult:
         t0 = time.monotonic()
         try:
             from pypdf import PdfReader
 
             reader = PdfReader(str(pdf_path))
-            pages_text: list[str] = []
+            all_pages = reader.pages
+
+            if page_range is not None:
+                selected = list(enumerate(all_pages[page_range.to_0based_slice()],
+                                          start=page_range.start))
+            else:
+                selected = list(enumerate(all_pages, start=1))
+
+            pages_text: list[tuple[int, str]] = []
             elements: list[ContentElement] = []
 
-            for i, page in enumerate(reader.pages):
+            for page_num, page in selected:
                 text = page.extract_text() or ""
-                pages_text.append(text)
+                pages_text.append((page_num, text))
                 if text.strip():
                     elements.append(ContentElement(
                         text=text.strip()[:500],
                         element_type="paragraph",
-                        page=i + 1,
+                        page=page_num,
                     ))
 
             md = "\n\n---\n\n".join(
-                f"<!-- Page {i+1} -->\n\n{t}" for i, t in enumerate(pages_text) if t.strip()
+                f"<!-- Page {pn} -->\n\n{t}"
+                for pn, t in pages_text if t.strip()
             )
+            extracted_count = len(selected)
             elapsed = time.monotonic() - t0
+            pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "pypdf fallback parsed %s: %d pages in %.1fs",
-                pdf_path.name, len(reader.pages), elapsed,
+                "pypdf fallback parsed %s%s: %d pages in %.1fs",
+                pdf_path.name, pr_label, extracted_count, elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -363,10 +430,11 @@ class PyPDFEngine(BaseEngine):
                 category=DocCategory.GENERAL,
                 markdown=md,
                 elements=elements,
-                page_count=len(reader.pages),
+                page_count=extracted_count,
                 table_count=0,
                 formula_count=0,
                 elapsed_sec=elapsed,
+                page_range=page_range,
             )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -378,6 +446,7 @@ class PyPDFEngine(BaseEngine):
                 markdown="",
                 elapsed_sec=elapsed,
                 error=str(exc),
+                page_range=page_range,
             )
 
 

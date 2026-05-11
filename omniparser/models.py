@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,75 @@ class DocCategory(str, Enum):
     MATH_HEAVY = "math_heavy"
     DUAL_COLUMN = "dual_column"
     GENERAL = "general"
+
+
+@dataclass(frozen=True)
+class PageRange:
+    """An inclusive page range (1-based).
+
+    Examples:
+        ``PageRange(1, 50)`` → pages 1 through 50.
+        ``PageRange(100, 100)`` → page 100 only.
+    """
+
+    start: int
+    end: int
+
+    def __post_init__(self) -> None:
+        if self.start < 1:
+            raise ValueError(f"start must be >= 1, got {self.start}")
+        if self.end < self.start:
+            raise ValueError(
+                f"end ({self.end}) must be >= start ({self.start})"
+            )
+
+    @property
+    def page_count(self) -> int:
+        return self.end - self.start + 1
+
+    def to_0based_slice(self) -> slice:
+        """Return a 0-based slice suitable for indexing a list of pages."""
+        return slice(self.start - 1, self.end)
+
+    def contains(self, page_1based: int) -> bool:
+        """Return True if *page_1based* falls within this range."""
+        return self.start <= page_1based <= self.end
+
+    def __str__(self) -> str:
+        return f"{self.start}-{self.end}"
+
+
+def parse_page_range(spec: str) -> PageRange:
+    """Parse a page-range string into a ``PageRange``.
+
+    Supported formats:
+        ``"10-50"``   → pages 10 through 50
+        ``"10"``      → page 10 only
+        ``"10-"``     → pages 10 to end (end = 999_999_999)
+        ``"-50"``     → pages 1 through 50
+    """
+    spec = spec.strip()
+    if not spec:
+        raise ValueError("Empty page range")
+
+    m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", spec)
+    if m:
+        return PageRange(int(m.group(1)), int(m.group(2)))
+
+    m = re.fullmatch(r"(\d+)\s*-\s*", spec)
+    if m:
+        return PageRange(int(m.group(1)), 999_999_999)
+
+    m = re.fullmatch(r"-\s*(\d+)", spec)
+    if m:
+        return PageRange(1, int(m.group(1)))
+
+    m = re.fullmatch(r"(\d+)", spec)
+    if m:
+        val = int(m.group(1))
+        return PageRange(val, val)
+
+    raise ValueError(f"Invalid page range: {spec!r}")
 
 
 @dataclass
@@ -79,6 +149,7 @@ class ParseResult:
     formula_count: int = 0
     elapsed_sec: float = 0.0
     error: str | None = None
+    page_range: PageRange | None = None
 
     @property
     def success(self) -> bool:

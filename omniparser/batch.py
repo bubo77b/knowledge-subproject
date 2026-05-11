@@ -9,7 +9,7 @@ from pathlib import Path
 
 from omniparser.config import Settings
 from omniparser.gpu_monitor import GPUMonitor
-from omniparser.models import ParseReport, ParseResult
+from omniparser.models import PageRange, ParseReport, ParseResult
 from omniparser.parser_engine import get_engine, get_fallback_engine
 from omniparser.postprocessor import LLMPostProcessor, MarkdownPostProcessor
 from omniparser.router import Router
@@ -17,7 +17,11 @@ from omniparser.router import Router
 logger = logging.getLogger("omniparser.batch")
 
 
-def _process_single(pdf_path_str: str, settings_dict: dict) -> dict:
+def _process_single(
+    pdf_path_str: str,
+    settings_dict: dict,
+    page_range_tuple: tuple[int, int] | None = None,
+) -> dict:
     """Worker function executed in a subprocess.
 
     Accepts and returns plain dicts / strings so it can be pickled across
@@ -27,16 +31,19 @@ def _process_single(pdf_path_str: str, settings_dict: dict) -> dict:
     _log.basicConfig(level=settings_dict.get("log_level", "INFO"))
 
     from omniparser.config import Settings as _S
+    from omniparser.models import PageRange
 
     settings = _S(**settings_dict)
     pdf_path = Path(pdf_path_str)
+    pr = PageRange(*page_range_tuple) if page_range_tuple else None
+
     router = Router()
     postproc = MarkdownPostProcessor()
     llm_postproc = LLMPostProcessor(settings)
 
     category, engine_type = router.classify(pdf_path)
     engine = get_engine(engine_type)
-    result = engine.parse(pdf_path)
+    result = engine.parse(pdf_path, page_range=pr)
 
     if not result.success:
         _log.getLogger("omniparser.batch").warning(
@@ -44,7 +51,7 @@ def _process_single(pdf_path_str: str, settings_dict: dict) -> dict:
             engine_type.value, pdf_path.name,
         )
         fallback = get_fallback_engine()
-        result = fallback.parse(pdf_path)
+        result = fallback.parse(pdf_path, page_range=pr)
 
     result.category = category
 
@@ -63,14 +70,20 @@ def _process_single(pdf_path_str: str, settings_dict: dict) -> dict:
         "elapsed_sec": result.elapsed_sec,
         "error": result.error,
         "elements": [e.to_dict() for e in result.elements],
+        "page_range": (pr.start, pr.end) if pr else None,
     }
 
 
 class BatchProcessor:
     """Orchestrate parallel PDF processing for an input directory."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        page_range: PageRange | None = None,
+    ) -> None:
         self._settings = settings
+        self._page_range = page_range
         self._gpu = GPUMonitor(
             limit_mb=settings.gpu_memory_limit_mb,
             interval_sec=settings.gpu_monitor_interval_sec,
@@ -92,12 +105,20 @@ class BatchProcessor:
 
         report = ParseReport()
         settings_dict = self._settings.model_dump()
+        pr_tuple = (
+            (self._page_range.start, self._page_range.end)
+            if self._page_range else None
+        )
 
         try:
             if self._settings.max_workers <= 1:
-                results = self._run_sequential(pdfs, settings_dict, output_dir)
+                results = self._run_sequential(
+                    pdfs, settings_dict, output_dir, pr_tuple,
+                )
             else:
-                results = self._run_parallel(pdfs, settings_dict, output_dir)
+                results = self._run_parallel(
+                    pdfs, settings_dict, output_dir, pr_tuple,
+                )
             report.results = results
         finally:
             self._gpu.stop()
@@ -109,26 +130,36 @@ class BatchProcessor:
     # ------------------------------------------------------------------
 
     def _run_sequential(
-        self, pdfs: list[Path], settings_dict: dict, output_dir: Path,
+        self,
+        pdfs: list[Path],
+        settings_dict: dict,
+        output_dir: Path,
+        pr_tuple: tuple[int, int] | None,
     ) -> list[ParseResult]:
         results: list[ParseResult] = []
         for pdf in pdfs:
             self._gpu.wait_until_safe()
-            raw = _process_single(str(pdf), settings_dict)
+            raw = _process_single(str(pdf), settings_dict, pr_tuple)
             result = self._raw_to_result(raw)
             self._write_outputs(result, raw, output_dir)
             results.append(result)
         return results
 
     def _run_parallel(
-        self, pdfs: list[Path], settings_dict: dict, output_dir: Path,
+        self,
+        pdfs: list[Path],
+        settings_dict: dict,
+        output_dir: Path,
+        pr_tuple: tuple[int, int] | None,
     ) -> list[ParseResult]:
         results: list[ParseResult] = []
         with ProcessPoolExecutor(max_workers=self._settings.max_workers) as pool:
             futures = {}
             for pdf in pdfs:
                 self._gpu.wait_until_safe()
-                fut = pool.submit(_process_single, str(pdf), settings_dict)
+                fut = pool.submit(
+                    _process_single, str(pdf), settings_dict, pr_tuple,
+                )
                 futures[fut] = pdf
 
             for fut in as_completed(futures):
@@ -155,6 +186,8 @@ class BatchProcessor:
     @staticmethod
     def _raw_to_result(raw: dict) -> ParseResult:
         from omniparser.models import DocCategory, EngineType
+        pr_tuple = raw.get("page_range")
+        pr = PageRange(*pr_tuple) if pr_tuple else None
         return ParseResult(
             source_path=Path(raw["source_path"]),
             engine=EngineType(raw["engine"]),
@@ -165,6 +198,7 @@ class BatchProcessor:
             formula_count=raw["formula_count"],
             elapsed_sec=raw["elapsed_sec"],
             error=raw["error"],
+            page_range=pr,
         )
 
     @staticmethod
@@ -176,7 +210,7 @@ class BatchProcessor:
             logger.info("Wrote %s", md_path)
 
         meta_path = output_dir / f"{stem}.json"
-        meta = {
+        meta: dict = {
             "source": str(result.source_path),
             "engine": result.engine.value,
             "category": result.category.value,
@@ -188,6 +222,8 @@ class BatchProcessor:
             "error": result.error,
             "elements": raw.get("elements", []),
         }
+        if result.page_range is not None:
+            meta["page_range"] = str(result.page_range)
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info("Wrote %s", meta_path)
 

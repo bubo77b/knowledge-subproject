@@ -29,6 +29,11 @@ def run(
     workers: int = typer.Option(
         1, "--workers", "-w", help="Number of parallel worker processes.",
     ),
+    pages: str = typer.Option(
+        "", "--pages", "-p",
+        help="Page range to extract, e.g. '1-50', '100-200', '10-'. "
+             "Applied to every PDF in the batch.",
+    ),
     llm: bool = typer.Option(
         False, "--llm", help="Enable LLM-based post-processing.",
     ),
@@ -39,6 +44,7 @@ def run(
     """Batch-convert PDFs in INPUT_DIR to clean Markdown."""
     from omniparser.config import Settings
     from omniparser.logger import setup_logging
+    from omniparser.models import parse_page_range
 
     settings = Settings(
         input_dir=input_dir,
@@ -49,9 +55,13 @@ def run(
     )
     setup_logging(level=settings.log_level, log_file=settings.log_file)
 
+    page_range = parse_page_range(pages) if pages.strip() else None
+    if page_range:
+        console.print(f"[dim]Page range: {page_range}[/dim]")
+
     from omniparser.batch import BatchProcessor
 
-    processor = BatchProcessor(settings)
+    processor = BatchProcessor(settings, page_range=page_range)
     report = processor.run(input_dir)
 
     table = Table(title="OmniParser Batch Report")
@@ -97,6 +107,10 @@ def single(
         "auto", "--engine", "-e",
         help="Force engine: auto, docling, mineru, marker.",
     ),
+    pages: str = typer.Option(
+        "", "--pages", "-p",
+        help="Page range to extract, e.g. '1-50', '100-200', '10-'.",
+    ),
     llm: bool = typer.Option(
         False, "--llm", help="Enable LLM-based post-processing.",
     ),
@@ -104,7 +118,7 @@ def single(
     """Process a single PDF file."""
     from omniparser.config import Settings
     from omniparser.logger import setup_logging
-    from omniparser.models import EngineType
+    from omniparser.models import EngineType, parse_page_range
     from omniparser.parser_engine import get_engine, get_fallback_engine
     from omniparser.postprocessor import LLMPostProcessor, MarkdownPostProcessor
     from omniparser.router import Router
@@ -113,6 +127,10 @@ def single(
     setup_logging(level=settings.log_level, log_file=settings.log_file)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    page_range = parse_page_range(pages) if pages.strip() else None
+    if page_range:
+        console.print(f"[dim]Page range: {page_range}[/dim]")
+
     if engine == "auto":
         router = Router()
         category, engine_type = router.classify(pdf_path)
@@ -120,12 +138,12 @@ def single(
         engine_type = EngineType(engine)
 
     eng = get_engine(engine_type)
-    result = eng.parse(pdf_path)
+    result = eng.parse(pdf_path, page_range=page_range)
 
     if not result.success:
         console.print("[yellow]Primary engine failed, trying pypdf fallback...[/yellow]")
         eng = get_fallback_engine()
-        result = eng.parse(pdf_path)
+        result = eng.parse(pdf_path, page_range=page_range)
 
     if result.success:
         postproc = MarkdownPostProcessor()
@@ -138,7 +156,7 @@ def single(
         md_path = output_dir / f"{pdf_path.stem}.md"
         md_path.write_text(result.markdown, encoding="utf-8")
 
-        meta = {
+        meta: dict = {
             "source": str(pdf_path),
             "engine": result.engine.value,
             "category": result.category.value,
@@ -148,14 +166,17 @@ def single(
             "elapsed_sec": round(result.elapsed_sec, 2),
             "elements": [e.to_dict() for e in result.elements],
         }
+        if page_range is not None:
+            meta["page_range"] = str(page_range)
         meta_path = output_dir / f"{pdf_path.stem}.json"
         meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8",
         )
 
+        pr_info = f" range={page_range}" if page_range else ""
         console.print(f"[green]✓[/green] {pdf_path.name} → {md_path}")
         console.print(
-            f"  engine={result.engine.value} pages={result.page_count} "
+            f"  engine={result.engine.value} pages={result.page_count}{pr_info} "
             f"tables={result.table_count} formulas={result.formula_count} "
             f"time={result.elapsed_sec:.1f}s",
         )
