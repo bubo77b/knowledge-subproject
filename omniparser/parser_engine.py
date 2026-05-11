@@ -31,7 +31,11 @@ class BaseEngine(ABC):
 
     @abstractmethod
     def parse(
-        self, pdf_path: Path, *, page_range: PageRange | None = None,
+        self,
+        pdf_path: Path,
+        *,
+        page_range: PageRange | None = None,
+        image_dir: Path | None = None,
     ) -> ParseResult:
         """Parse *pdf_path* and return a ``ParseResult``.
 
@@ -39,6 +43,8 @@ class BaseEngine(ABC):
             pdf_path: Path to the PDF file.
             page_range: Optional 1-based inclusive page range to extract.
                 When ``None``, the entire document is processed.
+            image_dir: Directory where extracted images should be saved.
+                When ``None``, images are not extracted.
         """
 
     # Shared helpers ---------------------------------------------------------
@@ -64,14 +70,32 @@ class DoclingEngine(BaseEngine):
     engine_type = EngineType.DOCLING
 
     def parse(
-        self, pdf_path: Path, *, page_range: PageRange | None = None,
+        self,
+        pdf_path: Path,
+        *,
+        page_range: PageRange | None = None,
+        image_dir: Path | None = None,
     ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
+        image_paths: list[Path] = []
         try:
-            from docling.document_converter import DocumentConverter
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import DocumentConverter, PdfFormatOption
 
-            converter = DocumentConverter()
+            pipeline_opts = PdfPipelineOptions()
+            if image_dir is not None:
+                pipeline_opts.generate_picture_images = True
+                pipeline_opts.images_scale = 2.0
+
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(
+                        pipeline_options=pipeline_opts,
+                    ),
+                },
+            )
 
             convert_kwargs: dict = {"source": str(pdf_path)}
             if page_range is not None:
@@ -80,7 +104,28 @@ class DoclingEngine(BaseEngine):
             result = converter.convert(**convert_kwargs)
             doc = result.document
 
-            md = doc.export_to_markdown()
+            if image_dir is not None:
+                from docling_core.types.doc.base import ImageRefMode
+
+                image_dir.mkdir(parents=True, exist_ok=True)
+                output_parent = image_dir.parent
+                img_dir_name = image_dir.name
+                tmp_md = output_parent / f"_tmp_{pdf_path.stem}.md"
+                try:
+                    doc.save_as_markdown(
+                        tmp_md,
+                        artifacts_dir=Path(img_dir_name),
+                        image_mode=ImageRefMode.REFERENCED,
+                    )
+                    md = tmp_md.read_text(encoding="utf-8")
+                finally:
+                    tmp_md.unlink(missing_ok=True)
+
+                for img in image_dir.rglob("*"):
+                    if img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+                        image_paths.append(img)
+            else:
+                md = doc.export_to_markdown()
 
             for i, item in enumerate(doc.texts):
                 page_no = self._extract_page_number(item, i)
@@ -101,8 +146,9 @@ class DoclingEngine(BaseEngine):
             elapsed = time.monotonic() - t0
             pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "Docling parsed %s%s: %d pages, %d elements in %.1fs",
-                pdf_path.name, pr_label, page_count, len(elements), elapsed,
+                "Docling parsed %s%s: %d pages, %d elements, %d images in %.1fs",
+                pdf_path.name, pr_label, page_count, len(elements),
+                len(image_paths), elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -113,6 +159,8 @@ class DoclingEngine(BaseEngine):
                 page_count=page_count,
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
+                image_count=len(image_paths),
+                image_paths=image_paths,
                 elapsed_sec=elapsed,
                 page_range=page_range,
             )
@@ -203,11 +251,17 @@ class MinerUEngine(BaseEngine):
     engine_type = EngineType.MINERU
 
     def parse(
-        self, pdf_path: Path, *, page_range: PageRange | None = None,
+        self,
+        pdf_path: Path,
+        *,
+        page_range: PageRange | None = None,
+        image_dir: Path | None = None,
     ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
+        image_paths: list[Path] = []
         try:
+            import shutil
             import subprocess
             import tempfile
 
@@ -234,6 +288,14 @@ class MinerUEngine(BaseEngine):
                 md = md_files[0].read_text(encoding="utf-8")
                 elements = self._elements_from_markdown(md)
 
+                if image_dir is not None:
+                    image_dir.mkdir(parents=True, exist_ok=True)
+                    for img in Path(tmpdir).rglob("*"):
+                        if img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                            dest = image_dir / img.name
+                            shutil.copy2(img, dest)
+                            image_paths.append(dest)
+
             page_count = self._page_count(pdf_path)
             if page_range is not None:
                 page_count = min(page_range.end, page_count) - page_range.start + 1
@@ -242,8 +304,8 @@ class MinerUEngine(BaseEngine):
             elapsed = time.monotonic() - t0
             pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "MinerU parsed %s%s: %d pages in %.1fs",
-                pdf_path.name, pr_label, page_count, elapsed,
+                "MinerU parsed %s%s: %d pages, %d images in %.1fs",
+                pdf_path.name, pr_label, page_count, len(image_paths), elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -254,6 +316,8 @@ class MinerUEngine(BaseEngine):
                 page_count=page_count,
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
+                image_count=len(image_paths),
+                image_paths=image_paths,
                 elapsed_sec=elapsed,
                 page_range=page_range,
             )
@@ -307,11 +371,17 @@ class MarkerEngine(BaseEngine):
     engine_type = EngineType.MARKER
 
     def parse(
-        self, pdf_path: Path, *, page_range: PageRange | None = None,
+        self,
+        pdf_path: Path,
+        *,
+        page_range: PageRange | None = None,
+        image_dir: Path | None = None,
     ) -> ParseResult:
         t0 = time.monotonic()
         elements: list[ContentElement] = []
+        image_paths: list[Path] = []
         try:
+            import shutil
             import subprocess
             import tempfile
 
@@ -338,6 +408,14 @@ class MarkerEngine(BaseEngine):
                 md = md_files[0].read_text(encoding="utf-8")
                 elements = MinerUEngine._elements_from_markdown(md)
 
+                if image_dir is not None:
+                    image_dir.mkdir(parents=True, exist_ok=True)
+                    for img in Path(tmpdir).rglob("*"):
+                        if img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                            dest = image_dir / img.name
+                            shutil.copy2(img, dest)
+                            image_paths.append(dest)
+
             page_count = MinerUEngine._page_count(pdf_path)
             if page_range is not None:
                 page_count = min(page_range.end, page_count) - page_range.start + 1
@@ -346,8 +424,8 @@ class MarkerEngine(BaseEngine):
             elapsed = time.monotonic() - t0
             pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "Marker parsed %s%s: %d pages in %.1fs",
-                pdf_path.name, pr_label, page_count, elapsed,
+                "Marker parsed %s%s: %d pages, %d images in %.1fs",
+                pdf_path.name, pr_label, page_count, len(image_paths), elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -358,6 +436,8 @@ class MarkerEngine(BaseEngine):
                 page_count=page_count,
                 table_count=self._count_tables(md),
                 formula_count=self._count_formulas(md),
+                image_count=len(image_paths),
+                image_paths=image_paths,
                 elapsed_sec=elapsed,
                 page_range=page_range,
             )
@@ -385,7 +465,11 @@ class PyPDFEngine(BaseEngine):
     engine_type = EngineType.DOCLING  # reported as docling-fallback in logs
 
     def parse(
-        self, pdf_path: Path, *, page_range: PageRange | None = None,
+        self,
+        pdf_path: Path,
+        *,
+        page_range: PageRange | None = None,
+        image_dir: Path | None = None,
     ) -> ParseResult:
         t0 = time.monotonic()
         try:
@@ -402,6 +486,7 @@ class PyPDFEngine(BaseEngine):
 
             pages_text: list[tuple[int, str]] = []
             elements: list[ContentElement] = []
+            image_paths: list[Path] = []
 
             for page_num, page in selected:
                 text = page.extract_text() or ""
@@ -413,16 +498,24 @@ class PyPDFEngine(BaseEngine):
                         page=page_num,
                     ))
 
-            md = "\n\n---\n\n".join(
-                f"<!-- Page {pn} -->\n\n{t}"
-                for pn, t in pages_text if t.strip()
-            )
+                if image_dir is not None:
+                    image_paths.extend(
+                        self._extract_page_images(page, page_num, image_dir, pdf_path.stem)
+                    )
+
+            md_parts: list[str] = []
+            for pn, text in pages_text:
+                if not text.strip():
+                    continue
+                md_parts.append(f"<!-- Page {pn} -->\n\n{text}")
+
+            md = "\n\n---\n\n".join(md_parts)
             extracted_count = len(selected)
             elapsed = time.monotonic() - t0
             pr_label = f" pages={page_range}" if page_range else ""
             logger.info(
-                "pypdf fallback parsed %s%s: %d pages in %.1fs",
-                pdf_path.name, pr_label, extracted_count, elapsed,
+                "pypdf fallback parsed %s%s: %d pages, %d images in %.1fs",
+                pdf_path.name, pr_label, extracted_count, len(image_paths), elapsed,
             )
             return ParseResult(
                 source_path=pdf_path,
@@ -433,6 +526,8 @@ class PyPDFEngine(BaseEngine):
                 page_count=extracted_count,
                 table_count=0,
                 formula_count=0,
+                image_count=len(image_paths),
+                image_paths=image_paths,
                 elapsed_sec=elapsed,
                 page_range=page_range,
             )
@@ -448,6 +543,26 @@ class PyPDFEngine(BaseEngine):
                 error=str(exc),
                 page_range=page_range,
             )
+
+    @staticmethod
+    def _extract_page_images(
+        page: object, page_num: int, image_dir: Path, stem: str,
+    ) -> list[Path]:
+        """Extract embedded images from a single pypdf page."""
+        saved: list[Path] = []
+        try:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            if not hasattr(page, "images"):
+                return saved
+            for idx, image in enumerate(page.images):
+                ext = Path(image.name).suffix or ".png"
+                filename = f"{stem}_p{page_num}_{idx}{ext}"
+                dest = image_dir / filename
+                dest.write_bytes(image.data)
+                saved.append(dest)
+        except Exception as exc:
+            logger.debug("Image extraction failed on page %d: %s", page_num, exc)
+        return saved
 
 
 # ---------------------------------------------------------------------------

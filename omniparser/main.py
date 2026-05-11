@@ -71,6 +71,7 @@ def run(
     table.add_column("Pages", justify="right")
     table.add_column("Tables", justify="right")
     table.add_column("Formulas", justify="right")
+    table.add_column("Images", justify="right")
     table.add_column("Time (s)", justify="right")
     table.add_column("Status", style="bold")
 
@@ -83,6 +84,7 @@ def run(
             str(r.page_count),
             str(r.table_count),
             str(r.formula_count),
+            str(r.image_count),
             f"{r.elapsed_sec:.1f}",
             status,
         )
@@ -137,13 +139,15 @@ def single(
     else:
         engine_type = EngineType(engine)
 
+    image_dir = output_dir / f"{pdf_path.stem}_images"
+
     eng = get_engine(engine_type)
-    result = eng.parse(pdf_path, page_range=page_range)
+    result = eng.parse(pdf_path, page_range=page_range, image_dir=image_dir)
 
     if not result.success:
         console.print("[yellow]Primary engine failed, trying pypdf fallback...[/yellow]")
         eng = get_fallback_engine()
-        result = eng.parse(pdf_path, page_range=page_range)
+        result = eng.parse(pdf_path, page_range=page_range, image_dir=image_dir)
 
     if result.success:
         postproc = MarkdownPostProcessor()
@@ -163,21 +167,25 @@ def single(
             "page_count": result.page_count,
             "table_count": result.table_count,
             "formula_count": result.formula_count,
+            "image_count": result.image_count,
             "elapsed_sec": round(result.elapsed_sec, 2),
             "elements": [e.to_dict() for e in result.elements],
         }
         if page_range is not None:
             meta["page_range"] = str(page_range)
+        if result.image_paths:
+            meta["image_paths"] = [str(p) for p in result.image_paths]
         meta_path = output_dir / f"{pdf_path.stem}.json"
         meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8",
         )
 
         pr_info = f" range={page_range}" if page_range else ""
+        img_info = f" images={result.image_count}" if result.image_count else ""
         console.print(f"[green]✓[/green] {pdf_path.name} → {md_path}")
         console.print(
             f"  engine={result.engine.value} pages={result.page_count}{pr_info} "
-            f"tables={result.table_count} formulas={result.formula_count} "
+            f"tables={result.table_count} formulas={result.formula_count}{img_info} "
             f"time={result.elapsed_sec:.1f}s",
         )
     else:

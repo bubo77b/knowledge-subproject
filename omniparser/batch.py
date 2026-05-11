@@ -21,6 +21,7 @@ def _process_single(
     pdf_path_str: str,
     settings_dict: dict,
     page_range_tuple: tuple[int, int] | None = None,
+    image_dir_str: str | None = None,
 ) -> dict:
     """Worker function executed in a subprocess.
 
@@ -36,6 +37,7 @@ def _process_single(
     settings = _S(**settings_dict)
     pdf_path = Path(pdf_path_str)
     pr = PageRange(*page_range_tuple) if page_range_tuple else None
+    img_dir = Path(image_dir_str) if image_dir_str else None
 
     router = Router()
     postproc = MarkdownPostProcessor()
@@ -43,7 +45,7 @@ def _process_single(
 
     category, engine_type = router.classify(pdf_path)
     engine = get_engine(engine_type)
-    result = engine.parse(pdf_path, page_range=pr)
+    result = engine.parse(pdf_path, page_range=pr, image_dir=img_dir)
 
     if not result.success:
         _log.getLogger("omniparser.batch").warning(
@@ -51,7 +53,7 @@ def _process_single(
             engine_type.value, pdf_path.name,
         )
         fallback = get_fallback_engine()
-        result = fallback.parse(pdf_path, page_range=pr)
+        result = fallback.parse(pdf_path, page_range=pr, image_dir=img_dir)
 
     result.category = category
 
@@ -67,10 +69,12 @@ def _process_single(
         "page_count": result.page_count,
         "table_count": result.table_count,
         "formula_count": result.formula_count,
+        "image_count": result.image_count,
         "elapsed_sec": result.elapsed_sec,
         "error": result.error,
         "elements": [e.to_dict() for e in result.elements],
         "page_range": (pr.start, pr.end) if pr else None,
+        "image_paths": [str(p) for p in result.image_paths],
     }
 
 
@@ -139,7 +143,8 @@ class BatchProcessor:
         results: list[ParseResult] = []
         for pdf in pdfs:
             self._gpu.wait_until_safe()
-            raw = _process_single(str(pdf), settings_dict, pr_tuple)
+            img_dir = str(output_dir / f"{pdf.stem}_images")
+            raw = _process_single(str(pdf), settings_dict, pr_tuple, img_dir)
             result = self._raw_to_result(raw)
             self._write_outputs(result, raw, output_dir)
             results.append(result)
@@ -157,8 +162,9 @@ class BatchProcessor:
             futures = {}
             for pdf in pdfs:
                 self._gpu.wait_until_safe()
+                img_dir = str(output_dir / f"{pdf.stem}_images")
                 fut = pool.submit(
-                    _process_single, str(pdf), settings_dict, pr_tuple,
+                    _process_single, str(pdf), settings_dict, pr_tuple, img_dir,
                 )
                 futures[fut] = pdf
 
@@ -188,6 +194,7 @@ class BatchProcessor:
         from omniparser.models import DocCategory, EngineType
         pr_tuple = raw.get("page_range")
         pr = PageRange(*pr_tuple) if pr_tuple else None
+        img_paths = [Path(p) for p in raw.get("image_paths", [])]
         return ParseResult(
             source_path=Path(raw["source_path"]),
             engine=EngineType(raw["engine"]),
@@ -196,6 +203,8 @@ class BatchProcessor:
             page_count=raw["page_count"],
             table_count=raw["table_count"],
             formula_count=raw["formula_count"],
+            image_count=raw.get("image_count", 0),
+            image_paths=img_paths,
             elapsed_sec=raw["elapsed_sec"],
             error=raw["error"],
             page_range=pr,
@@ -217,6 +226,7 @@ class BatchProcessor:
             "page_count": result.page_count,
             "table_count": result.table_count,
             "formula_count": result.formula_count,
+            "image_count": result.image_count,
             "elapsed_sec": round(result.elapsed_sec, 2),
             "success": result.success,
             "error": result.error,
@@ -224,6 +234,8 @@ class BatchProcessor:
         }
         if result.page_range is not None:
             meta["page_range"] = str(result.page_range)
+        if result.image_paths:
+            meta["image_paths"] = [str(p) for p in result.image_paths]
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info("Wrote %s", meta_path)
 
@@ -242,6 +254,7 @@ class BatchProcessor:
                     "pages": r.page_count,
                     "tables": r.table_count,
                     "formulas": r.formula_count,
+                    "images": r.image_count,
                     "elapsed_sec": round(r.elapsed_sec, 2),
                     "success": r.success,
                     "error": r.error,

@@ -147,6 +147,8 @@ class ParseResult:
     page_count: int = 0
     table_count: int = 0
     formula_count: int = 0
+    image_count: int = 0
+    image_paths: list[Path] = field(default_factory=list)
     elapsed_sec: float = 0.0
     error: str | None = None
     page_range: PageRange | None = None
