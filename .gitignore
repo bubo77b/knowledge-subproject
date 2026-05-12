@@ -1,33 +1,17 @@
-.venv*/
 __pycache__/
-.pytest_cache/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 *.egg-info/
-knowledge.db
-outputs/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
 .env
-__pycache__/
+*.log
+output/
+input/
+*.pdf
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.pyc
-*.pyo
-*.pyd
-
-# Local generated data
-knowledge.db
-input_docs/
-obsidian_vault/
-
-# Virtual environments
-.venv/
-venv/
-.venv312-mineru/
-
-# Local test artifacts
-smoke*.db
-smoke_*/
-output/
-src/*.egg-info/
